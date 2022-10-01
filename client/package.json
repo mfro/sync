@@ -1,0 +1,11 @@
+{
+  "name": "@mfro/sync-vue",
+  "version": "1.0.0",
+  "license": "MIT",
+  "main": "src/lib.ts",
+  "dependencies": {
+    "@mfro/assert": "^1.0.0",
+    "@vue/reactivity": "3",
+    "@vue/shared": "3"
+  }
+}

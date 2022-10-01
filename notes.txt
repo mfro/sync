@@ -1,0 +1,29 @@
+ideas:
+  attach
+  detach
+  update
+
+node:
+  /new
+  /attach?id=...
+
+namespacing:
+  attach is a json path
+  would need some sort of access control
+  otherwise joining the root would show everything
+
+plans:
+  use node approach
+  rust probably
+  sqlite / mongodb
+  consider for the future node ref type to allow referencing other nodes
+
+  WS /new create node
+    101 { ... }
+
+  WS /attach?id=...&head=...
+    101 { ... }
+
+  WS protocol
+    <- { "id": "...", "version": 0, "changes": [...] }
+    -> { "version": 0, "changes": [] }
