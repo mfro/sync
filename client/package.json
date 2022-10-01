@@ -6,6 +6,7 @@
   "dependencies": {
     "@mfro/assert": "^1.0.0",
     "@vue/reactivity": "3",
+    "@vue/runtime-core": "3",
     "@vue/shared": "3"
   }
 }

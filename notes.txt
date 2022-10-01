@@ -27,3 +27,10 @@ plans:
   WS protocol
     <- { "id": "...", "version": 0, "changes": [...] }
     -> { "version": 0, "changes": [] }
+
+features:
+  ref type references a path in the node
+  speculation recovery
+  client-side cache/save
+    - localStorage?
+    - indexedDB?

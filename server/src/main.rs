@@ -16,7 +16,6 @@ use hyper::{
 };
 use hyper_tungstenite::{tungstenite::Message, WebSocketStream};
 use rand::{thread_rng, Rng};
-use rusqlite::Connection;
 use serde_derive::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -24,6 +23,8 @@ use url::Url;
 
 mod error;
 use error::Error;
+
+type DatabaseConnection = rusqlite::Connection;
 
 type Socket = WebSocketStream<Upgraded>;
 type SocketSink = SplitSink<WebSocketStream<Upgraded>, Message>;
@@ -125,7 +126,7 @@ fn apply(value: &mut Value, change: Change) {
 }
 
 fn load_changes(
-    conn: &Connection,
+    conn: &DatabaseConnection,
     id: usize,
     version: usize,
 ) -> Result<Vec<Change>, rusqlite::Error> {
@@ -133,12 +134,12 @@ fn load_changes(
         "select changes.target, changes.value
             from updates
             inner join changes on changes.updateId = updates.id
-            where updates.nodeId = ?1 and updates.version >= ?2
+            where updates.nodeId = ? and updates.version >= ?
             order by updates.version, changes.ordering",
     )?;
 
     let result: Result<Vec<_>, _> = statement
-        .query_map([id, version], |row| {
+        .query_map((id, version), |row| {
             Ok(Change::new(row.get(0)?, row.get(1)?))
         })?
         .collect();
@@ -146,9 +147,9 @@ fn load_changes(
     result
 }
 
-fn load_version(conn: &Connection, id: usize) -> Result<usize, rusqlite::Error> {
+fn load_version(conn: &DatabaseConnection, id: usize) -> Result<usize, rusqlite::Error> {
     let version: Option<usize> = conn.query_row(
-        "select max(version) from updates where updates.nodeId = ?1",
+        "select max(version) from updates where updates.nodeId = ?",
         [id],
         |row| row.get(0),
     )?;
@@ -185,20 +186,21 @@ struct ServerHandshake {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct ServerUpdate {
     version: usize,
-    changes: Vec<Change>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    changes: Option<Vec<Change>>,
 }
 
 struct Context {
-    db: Arc<Mutex<Connection>>,
+    db: Arc<Mutex<DatabaseConnection>>,
     nodes: RwLock<HashMap<String, Arc<Node>>>,
 }
 
 struct Node {
     id: usize,
     key: String,
-    db: Arc<Mutex<Connection>>,
-    state: Mutex<NodeState>,
-    sockets: tokio::sync::Mutex<NodeSockets>,
+    db: Arc<Mutex<DatabaseConnection>>,
+    inner: tokio::sync::Mutex<NodeState>,
 }
 
 #[derive(Default)]
@@ -220,24 +222,17 @@ impl NodeSockets {
         let index = self.active.iter().position(|pair| id == pair.0);
         let _ = self.active.remove(index.unwrap());
     }
-
-    fn iter(&self) -> impl Iterator<Item = &SocketSink> {
-        self.active.iter().map(|(_, sink)| sink)
-    }
-
-    fn iter_mut(&mut self) -> impl Iterator<Item = &mut SocketSink> {
-        self.active.iter_mut().map(|(_, sink)| sink)
-    }
 }
 
 struct NodeState {
     version: usize,
     data: Value,
+    sockets: NodeSockets,
 }
 
 impl Node {
     fn new(
-        db: Arc<Mutex<Connection>>,
+        db: Arc<Mutex<DatabaseConnection>>,
         id: usize,
         key: String,
         version: usize,
@@ -246,34 +241,36 @@ impl Node {
         let data = data.into();
         let sockets = Default::default();
 
-        let inner = Mutex::new(NodeState { version, data });
-
-        Node {
-            id,
-            key,
-            db,
-            state: inner,
+        let inner = NodeState {
+            version,
+            data,
             sockets,
         }
+        .into();
+
+        Node { id, key, db, inner }
     }
 
-    async fn handle(&self, update: ClientUpdate) {
-        let version = {
-            let mut inner = self.state.lock().unwrap();
+    async fn handle(&self, update: ClientUpdate, from: usize) {
+        let t0 = std::time::Instant::now();
 
-            for change in update.changes.clone() {
-                apply(&mut inner.data, change);
-            }
+        let mut inner = self.inner.lock().await;
 
-            inner.version += 1;
-            inner.version
-        };
+        for change in update.changes.clone() {
+            apply(&mut inner.data, change);
+        }
+
+        inner.version += 1;
+        let version = inner.version;
+
+        let t1 = std::time::Instant::now();
 
         {
-            let db = self.db.lock().unwrap();
+            let mut db = self.db.lock().unwrap();
+            let db = db.transaction().unwrap();
 
             db.execute(
-                "insert into updates (nodeId, version) values (?1, ?2)",
+                "insert into updates (nodeId, version) values (?, ?)",
                 (self.id, version),
             )
             .unwrap();
@@ -282,53 +279,84 @@ impl Node {
 
             for (ordering, change) in update.changes.iter().enumerate() {
                 db.execute(
-                    "insert into changes (updateId, ordering, target, value) values (?1, ?2, ?3, ?4)",
+                    "insert into changes (updateId, ordering, target, value) values (?, ?, ?, ?)",
                     (update_id, ordering, &change.target, &change.value),
                 )
                 .unwrap();
             }
+
+            db.commit().unwrap();
         }
+
+        let t2 = std::time::Instant::now();
 
         let notify = ServerUpdate {
             version,
-            changes: update.changes,
+            changes: Some(update.changes),
         };
 
         let notify = serde_json::to_string(&notify).unwrap();
         let message = Message::Text(notify);
 
-        for sink in self.sockets.lock().await.iter_mut() {
-            sink.send(message.clone()).await.unwrap();
+        let t3 = std::time::Instant::now();
+
+        for (id, sink) in inner.sockets.active.iter_mut() {
+            if *id == from {
+                let notify = ServerUpdate {
+                    version,
+                    changes: None,
+                };
+
+                let notify = serde_json::to_string(&notify).unwrap();
+                sink.send(Message::Text(notify)).await.unwrap();
+            } else {
+                sink.send(message.clone()).await.unwrap();
+            }
         }
+
+        let t4 = std::time::Instant::now();
+        println!("handle {:?}", t1 - t0);
+        println!("       {:?}", t2 - t1);
+        println!("       {:?}", t3 - t2);
+        println!("       {:?}", t4 - t3);
     }
 
     async fn attach(scope: &Node, socket: Socket, head: usize) {
-        let handshake = {
-            let conn = scope.db.lock().unwrap();
-
-            let changes = load_changes(&*conn, scope.id, head).unwrap();
-            let version = load_version(&*conn, scope.id).unwrap();
-
-            ServerHandshake {
-                id: Some(scope.key.clone()),
-
-                update: ServerUpdate { version, changes },
-            }
-        };
-
         let (mut sink, mut source) = socket.split();
 
-        sink.send(Message::Text(serde_json::to_string(&handshake).unwrap()))
-            .await
-            .unwrap();
+        let t0 = std::time::Instant::now();
 
-        let socket_id = scope.sockets.lock().await.add(sink);
+        let socket_id = {
+            let mut inner = scope.inner.lock().await;
+
+            let handshake = {
+                let mut conn = scope.db.lock().unwrap();
+
+                let changes = Some(load_changes(&mut *conn, scope.id, head).unwrap());
+                let version = load_version(&mut *conn, scope.id).unwrap();
+
+                ServerHandshake {
+                    id: Some(scope.key.clone()),
+                    update: ServerUpdate { version, changes },
+                }
+            };
+
+            sink.send(Message::Text(serde_json::to_string(&handshake).unwrap()))
+                .await
+                .unwrap();
+
+            inner.sockets.add(sink)
+        };
+
+        let t1 = std::time::Instant::now();
+
+        println!("attach in {:?}", t1 - t0);
 
         while let Some(message) = source.next().await {
             match message.unwrap() {
                 Message::Text(message) => {
                     let update: ClientUpdate = serde_json::from_str(&message).unwrap();
-                    scope.handle(update).await;
+                    scope.handle(update, socket_id).await;
                 }
 
                 Message::Close(_) | Message::Ping(_) | Message::Pong(_) => break,
@@ -337,7 +365,7 @@ impl Node {
             }
         }
 
-        scope.sockets.lock().await.remove(socket_id);
+        scope.inner.lock().await.sockets.remove(socket_id);
     }
 }
 
@@ -359,12 +387,10 @@ fn join_node(context: &Arc<Context>, key: String) -> Result<Arc<Node>, Error> {
     }
 
     let t0 = std::time::Instant::now();
-    let conn = context.db.lock()?;
-    let id: usize = conn
-        .query_row("select id from nodes where key = ?1", [&key], |row| {
-            row.get(0)
-        })
-        .unwrap();
+    let conn = context.db.lock().unwrap();
+    let id: usize = conn.query_row("select id from nodes where key = ?", [&key], |row| {
+        row.get(0)
+    })?;
 
     let mut data = Value::Object(Default::default());
 
@@ -397,7 +423,7 @@ fn create_node(context: &Arc<Context>) -> Result<Arc<Node>, Error> {
     let key = hex::encode(bits);
 
     let conn = context.db.lock()?;
-    conn.execute("insert into nodes (key) values (?1)", [&key])?;
+    conn.execute("insert into nodes (key) values (?)", [&key])?;
 
     let id = conn.last_insert_rowid() as usize;
 
@@ -451,7 +477,7 @@ async fn hello_world(
 
 #[tokio::main]
 async fn main() -> Result<(), rusqlite::Error> {
-    let conn = Connection::open("./db.sqlite")?;
+    let conn = DatabaseConnection::open("./db.sqlite")?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS nodes (
