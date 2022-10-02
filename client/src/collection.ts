@@ -18,4 +18,8 @@ export namespace Collection {
 
     return c[id] = Object.assign({ id }, value);
   }
+
+  export function remove<T>(c: Collection<T>, id: number) {
+    delete c[id];
+  }
 }

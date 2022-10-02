@@ -37,7 +37,7 @@ const Fields = {
 };
 
 const proxyMap = new WeakMap<object, object>();
-const handler: ProxyHandler<any> = {
+const objectHandler: ProxyHandler<any> = {
   has(target, key) {
     track(target, Track.HAS, key);
     return key in target;
@@ -62,6 +62,58 @@ const handler: ProxyHandler<any> = {
 
   set(target, key, value, self) {
     if (typeof key == 'symbol') {
+      return Reflect.set(target, key, value, self);
+    } else {
+      const path: string = target[Fields.path] + Path.toString([key]);
+      const context: Context = target[Fields.context];
+
+      update(context, path, value);
+      return true;
+    }
+  },
+
+  deleteProperty(target, key) {
+    if (typeof key == 'symbol') {
+      return Reflect.deleteProperty(target, key);
+    } else {
+      const path = target[Fields.path] + Path.toString([key]);
+      update(target[Fields.context], path, undefined);
+
+      return true;
+    }
+  },
+
+  ownKeys(target) {
+    track(target, Track.ITERATE, ITERATE_KEY);
+    return Reflect.ownKeys(target)
+  },
+};
+
+const arrayHandler: ProxyHandler<any> = {
+  has(target, key) {
+    track(target, Track.HAS, key);
+    return key in target;
+  },
+
+  get(target, key, self) {
+    if (key == Flags.RAW)
+      return target;
+
+    track(target, Track.GET, key);
+    const value = Reflect.get(target, key, self);
+
+    if (typeof key == 'symbol' || !isObject(value)) {
+      return value;
+    } else {
+      const path: string = target[Fields.path] + Path.toString([key]);
+      const context: Context = target[Fields.context];
+
+      return createValue(context, path, value);
+    }
+  },
+
+  set(target, key, value, self) {
+    if (typeof key == 'symbol' || key in Array.prototype) {
       return Reflect.set(target, key, value, self);
     } else {
       const path: string = target[Fields.path] + Path.toString([key]);
@@ -198,7 +250,10 @@ function createValue<T extends Record<any, any>>(context: Context, path: string,
     },
   });
 
+  const handler = Array.isArray(target) ? arrayHandler : objectHandler;
+
   const value = new Proxy(target, handler);
   proxyMap.set(target, value);
+
   return value;
 }

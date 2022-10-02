@@ -116,7 +116,11 @@ fn apply(value: &mut Value, change: Change) {
                     list.remove(index);
                 }
                 Some(v) => {
-                    list[index] = v;
+                    if index == list.len() {
+                        list.push(v);
+                    } else {
+                        list[index] = v;
+                    }
                 }
             }
         }
