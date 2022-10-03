@@ -31,6 +31,3 @@ plans:
 features:
   ref type references a path in the node
   speculation recovery
-  client-side cache/save
-    - localStorage?
-    - indexedDB?

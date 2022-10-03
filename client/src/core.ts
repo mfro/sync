@@ -12,6 +12,8 @@ export interface Context {
   speculation: number;
   changes: Change[],
   root: any;
+
+  cacheKey: string;
 }
 
 const Track = {
@@ -167,23 +169,33 @@ function flush(context: Context) {
   context.changes.length = 0;
 }
 
-export function init(ws: WebSocket) {
+export function init(ws: WebSocket, ...args: [string] | [string, number, any]) {
+  let [cacheKey, version, state] = args.length == 1
+    ? ['', 0, {}]
+    : args;
+
   return new Promise<{ data: {}, id: string }>(resolve => {
     const context: Context = {
       ws,
-      version: 0,
+      version,
       speculation: 0,
       changes: [],
       root: null,
+      cacheKey,
     };
 
-    context.root = createValue(context, '', {});
+    context.root = createValue(context, '', args[2] ?? {});
 
     ws.addEventListener('close', e => console.log(e));
     ws.addEventListener('error', e => console.log(e));
 
     ws.addEventListener('message', e => {
       const message: ServerHandshake | ServerUpdate = JSON.parse(e.data);
+
+      if ('id' in message) {
+        context.cacheKey = `mfro:sync:${args[0]}:${message.id}`;
+      }
+
       applyUpdate(context, message);
 
       if ('id' in message) {
@@ -211,6 +223,11 @@ export function applyUpdate(context: Context, update: ServerUpdate) {
     assert(context.speculation > 0, 'speculation');
     context.speculation -= 1;
   }
+
+  localStorage.setItem(context.cacheKey, JSON.stringify({
+    version: context.version,
+    state: context.root,
+  }));
 }
 
 function applyChange(context: Context, target: string, value: any) {

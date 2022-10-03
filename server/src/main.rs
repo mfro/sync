@@ -138,7 +138,7 @@ fn load_changes(
         "select changes.target, changes.value
             from updates
             inner join changes on changes.updateId = updates.id
-            where updates.nodeId = ? and updates.version >= ?
+            where updates.nodeId = ? and updates.version > ?
             order by updates.version, changes.ordering",
     )?;
 
@@ -164,6 +164,8 @@ fn load_version(conn: &DatabaseConnection, id: usize) -> Result<usize, rusqlite:
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Change {
     target: String,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     value: Option<Value>,
 }
 
@@ -447,7 +449,7 @@ fn create_node(context: &Arc<Context>) -> Result<Arc<Node>, Error> {
 #[derive(Serialize, Deserialize)]
 struct JoinQueryParameters {
     id: String,
-    head: Option<usize>,
+    version: Option<usize>,
 }
 
 async fn hello_world(
@@ -472,7 +474,7 @@ async fn hello_world(
             let params: JoinQueryParameters = serde_qs::from_str(query)?;
             let node = join_node(&context, params.id)?;
 
-            connect(node, request, params.head.unwrap_or(0))
+            connect(node, request, params.version.unwrap_or(0))
         }
 
         _ => response(StatusCode::NOT_FOUND, "unknown path"),
