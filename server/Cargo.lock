@@ -646,26 +646,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "futures",
- "hex",
- "hyper",
- "hyper-tungstenite",
- "rand",
- "rusqlite",
- "serde",
- "serde_derive",
- "serde_json",
- "serde_qs",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "url",
-]
-
-[[package]]
 name = "sha-1"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -719,6 +699,26 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sync-server"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "hex",
+ "hyper",
+ "hyper-tungstenite",
+ "rand",
+ "rusqlite",
+ "serde",
+ "serde_derive",
+ "serde_json",
+ "serde_qs",
+ "tokio",
+ "tokio-stream",
+ "tokio-util",
+ "url",
 ]
 
 [[package]]

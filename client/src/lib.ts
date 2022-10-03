@@ -3,7 +3,7 @@ export { Collection } from './collection';
 
 export async function join_new(host: string) {
   const ws = new WebSocket(`${host}/new`);
-  return await init(ws, host);
+  return await init(ws);
 }
 
 export async function join(host: string, id: string) {
@@ -12,7 +12,7 @@ export async function join(host: string, id: string) {
   let state = {};
 
   if (id !== null) {
-    cacheKey = `mfro:sync:${host}:${id}`;
+    cacheKey = `mfro:sync:${id}`;
     const cache = localStorage.getItem(cacheKey);
 
     if (cache) {

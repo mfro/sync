@@ -169,8 +169,8 @@ function flush(context: Context) {
   context.changes.length = 0;
 }
 
-export function init(ws: WebSocket, ...args: [string] | [string, number, any]) {
-  let [cacheKey, version, state] = args.length == 1
+export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
+  let [cacheKey, version, state] = args.length == 0
     ? ['', 0, {}]
     : args;
 
@@ -184,7 +184,7 @@ export function init(ws: WebSocket, ...args: [string] | [string, number, any]) {
       cacheKey,
     };
 
-    context.root = createValue(context, '', args[2] ?? {});
+    context.root = createValue(context, '', state);
 
     ws.addEventListener('close', e => console.log(e));
     ws.addEventListener('error', e => console.log(e));
@@ -193,7 +193,7 @@ export function init(ws: WebSocket, ...args: [string] | [string, number, any]) {
       const message: ServerHandshake | ServerUpdate = JSON.parse(e.data);
 
       if ('id' in message) {
-        context.cacheKey = `mfro:sync:${args[0]}:${message.id}`;
+        context.cacheKey = `mfro:sync:${message.id}`;
       }
 
       applyUpdate(context, message);
