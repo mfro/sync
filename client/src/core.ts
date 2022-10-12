@@ -6,6 +6,19 @@ import { assert } from '@mfro/assert';
 import { Path } from './path';
 import { Change, ServerHandshake, ServerUpdate } from './common';
 
+export type Adapter = (context: Context, path: string, v: JSONObject) => object;
+
+export type JSON =
+  | null
+  | number
+  | string
+  | boolean
+  | JSONArray
+  | JSONObject
+
+export type JSONArray = JSON[];
+export type JSONObject = Partial<{ [key: string]: JSON }>;
+
 export interface Context {
   ws: WebSocket;
   version: number;
@@ -16,40 +29,47 @@ export interface Context {
   cacheKey: string;
 }
 
-const Track = {
+export const VueTrackOps = {
   GET: 'get' as TrackOpTypes.GET,
   HAS: 'has' as TrackOpTypes.HAS,
   ITERATE: 'iterate' as TrackOpTypes.ITERATE,
 };
 
-const Trigger = {
+export const VueTriggerOps = {
   SET: 'set' as TriggerOpTypes.SET,
   ADD: 'add' as TriggerOpTypes.ADD,
   DELETE: 'delete' as TriggerOpTypes.DELETE,
   CLEAR: 'clear' as TriggerOpTypes.CLEAR,
 };
 
-const Flags = {
+export const VueFlags = {
   RAW: '__v_raw' as ReactiveFlags.RAW,
 };
 
-const Fields = {
+export const Fields = {
   path: '__mfro_path',
   context: '__mfro_context',
+} as const;
+
+type ProxyBase = {
+  [Fields.path]: string,
+  [Fields.context]: Context,
 };
 
-const proxyMap = new WeakMap<object, object>();
-const objectHandler: ProxyHandler<any> = {
+const adapters = new Map<string, Adapter>();
+const proxyMap = new WeakMap<any, object>();
+
+const objectHandler: ProxyHandler<JSONObject & ProxyBase> = {
   has(target, key) {
-    track(target, Track.HAS, key);
+    track(target, VueTrackOps.HAS, key);
     return key in target;
   },
 
   get(target, key, self) {
-    if (key == Flags.RAW)
+    if (key == VueFlags.RAW)
       return target;
 
-    track(target, Track.GET, key);
+    track(target, VueTrackOps.GET, key);
     const value = Reflect.get(target, key, self);
 
     if (typeof key == 'symbol' || !isObject(value)) {
@@ -86,22 +106,22 @@ const objectHandler: ProxyHandler<any> = {
   },
 
   ownKeys(target) {
-    track(target, Track.ITERATE, ITERATE_KEY);
+    track(target, VueTrackOps.ITERATE, ITERATE_KEY);
     return Reflect.ownKeys(target)
   },
 };
 
-const arrayHandler: ProxyHandler<any> = {
+const arrayHandler: ProxyHandler<JSONArray & ProxyBase> = {
   has(target, key) {
-    track(target, Track.HAS, key);
+    track(target, VueTrackOps.HAS, key);
     return key in target;
   },
 
   get(target, key, self) {
-    if (key == Flags.RAW)
+    if (key == VueFlags.RAW)
       return target;
 
-    track(target, Track.GET, key);
+    track(target, VueTrackOps.GET, key);
     const value = Reflect.get(target, key, self);
 
     if (typeof key == 'symbol' || !isObject(value)) {
@@ -138,22 +158,10 @@ const arrayHandler: ProxyHandler<any> = {
   },
 
   ownKeys(target) {
-    track(target, Track.ITERATE, ITERATE_KEY);
+    track(target, VueTrackOps.ITERATE, ITERATE_KEY);
     return Reflect.ownKeys(target)
   },
 };
-
-function update(context: Context, target: string, value: any) {
-  // console.log(`update`, target, value);
-
-  if (context.changes.length == 0) {
-    nextTick(() => flush(context));
-  }
-
-  context.changes.push({ target, value });
-
-  applyChange(context, target, value);
-}
 
 function flush(context: Context) {
   // console.log(`flush`, context.changes);
@@ -208,7 +216,7 @@ export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
   });
 }
 
-export function applyUpdate(context: Context, update: ServerUpdate) {
+function applyUpdate(context: Context, update: ServerUpdate) {
   // console.log(update);
 
   if (update.changes) {
@@ -237,16 +245,16 @@ function applyChange(context: Context, target: string, value: any) {
 
   if (value === undefined) {
     delete receiver[lastKey];
-    trigger(receiver, Trigger.DELETE, lastKey);
+    trigger(receiver, VueTriggerOps.DELETE, lastKey);
   } else {
     const hadKey = lastKey in receiver;
 
     receiver[lastKey] = value;
-    trigger(receiver, hadKey ? Trigger.SET : Trigger.ADD, lastKey);
+    trigger(receiver, hadKey ? VueTriggerOps.SET : VueTriggerOps.ADD, lastKey);
   }
 }
 
-function createValue<T extends Record<any, any>>(context: Context, path: string, target: T): T {
+export function createValue<T extends JSONObject | JSONArray>(context: Context, path: string, target: T): T {
   assert(typeof target == 'object' && target != null, 'createValue');
 
   const existing = proxyMap.get(target);
@@ -269,8 +277,27 @@ function createValue<T extends Record<any, any>>(context: Context, path: string,
 
   const handler = Array.isArray(target) ? arrayHandler : objectHandler;
 
-  const value = new Proxy(target, handler);
+  const value = new Proxy(target as any, handler);
   proxyMap.set(target, value);
 
   return value;
+}
+
+export function registerAdapter(name: string, adapter: Adapter) {
+  assert(!adapters.has(name), `duplicate adapter definition ${name}`);
+  adapters.set(name, adapter);
+}
+
+export function update(context: Context, target: string, value: any) {
+  // console.log(`update`, target, value);
+
+  value = toRaw(value);
+
+  if (context.changes.length == 0) {
+    nextTick(() => flush(context));
+  }
+
+  context.changes.push({ target, value });
+
+  applyChange(context, target, value);
 }
