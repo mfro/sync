@@ -1,6 +1,8 @@
 import { init } from './core';
 export { Collection } from './collection';
 
+import './ref';
+
 export async function join_new(host: string) {
   const ws = new WebSocket(`${host}/new`);
   return await init(ws);
