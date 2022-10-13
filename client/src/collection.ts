@@ -1,35 +1,23 @@
-import { createValue, registerAdapter, VueFlags } from "./core";
+import { Adapt } from './core';
 
-export type Collection<T> =
+export type CollectionModel<T> =
   & { [id: number]: T & { id: number } }
   & { nextId: number };
 
-// export namespace Collection {
-//   export function create<T>(): Collection<T> {
-//     return { nextId: 0 };
-//   }
+export class Collection<T> extends Adapt<CollectionModel<T>> {
+  static create<T>() {
+    return new Collection<T>({ nextId: 0 });
+  }
 
-//   export function array<T>(c: Collection<T>) {
-//     return Object.keys(c)
-//       .filter(id => id != 'nextId')
-//       .map(id => c[id as any]);
-//   }
+  get(id: number) {
+    return this.model[id];
+  }
 
-//   export function insert<T>(c: Collection<T>, value: T) {
-//     const id = c.nextId++;
-
-//     return c[id] = Object.assign({ id }, value);
-//   }
-
-//   export function remove<T>(c: Collection<T>, id: number) {
-//     delete c[id];
-//   }
-// }
-
-export class Collection2<T> {
-  constructor(
-    private readonly model: Collection<T>,
-  ) { }
+  array() {
+    return Object.keys(this.model)
+      .filter(id => id != 'nextId')
+      .map(id => this.model[id as any]);
+  }
 
   insert(value: T) {
     const id = this.model.nextId++;
@@ -42,8 +30,4 @@ export class Collection2<T> {
   }
 }
 
-registerAdapter('collection', (context, path, value) => {
-  const model = createValue(context, path, value);
-
-  return new Collection2(model as Collection<any>);
-});
+Adapt.register('collection', Collection);

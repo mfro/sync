@@ -6,9 +6,20 @@ import { assert } from '@mfro/assert';
 import { Path } from './path';
 import { Change, ServerHandshake, ServerUpdate } from './common';
 
-export type Adapter = (context: Context, path: string, v: JSONObject) => object;
+export class Adapt<Model> {
+  constructor(
+    protected readonly model: Model
+  ) { }
 
-export type JSON =
+  static register<T>(name: string, adapter: typeof Adapt<T>) {
+    assert(!adapters.has(name), `duplicate adapter definition ${name}`);
+    adapters.set(name, adapter);
+  }
+}
+
+// export type Adapter = (context: Context, path: string, v: JSONObject) => object;
+
+export type JSONValue =
   | null
   | number
   | string
@@ -16,8 +27,8 @@ export type JSON =
   | JSONArray
   | JSONObject
 
-export type JSONArray = JSON[];
-export type JSONObject = Partial<{ [key: string]: JSON }>;
+export type JSONArray = JSONValue[];
+export type JSONObject = Partial<{ [key: string]: JSONValue }>;
 
 export interface Context {
   ws: WebSocket;
@@ -56,7 +67,7 @@ type ProxyBase = {
   [Fields.context]: Context,
 };
 
-const adapters = new Map<string, Adapter>();
+const adapters = new Map<string, typeof Adapt<any>>();
 const proxyMap = new WeakMap<any, object>();
 
 const objectHandler: ProxyHandler<JSONObject & ProxyBase> = {
@@ -281,11 +292,6 @@ export function createValue<T extends JSONObject | JSONArray>(context: Context, 
   proxyMap.set(target, value);
 
   return value;
-}
-
-export function registerAdapter(name: string, adapter: Adapter) {
-  assert(!adapters.has(name), `duplicate adapter definition ${name}`);
-  adapters.set(name, adapter);
 }
 
 export function update(context: Context, target: string, value: any) {
