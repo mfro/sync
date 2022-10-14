@@ -1,0 +1,22 @@
+{
+  "name": "test",
+  "version": "0.0.0",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --outfile=main.js",
+    "watch": "esbuild src/main.ts --bundle --platform=node --outfile=main.js --watch",
+    "typecheck": "tsc --noEmit",
+    "typewatch": "tsc --noEmit --watch"
+  },
+  "dependencies": {
+    "@mfro/assert": "^1.0.0",
+    "@mfro/sync-vue": "^1.0.0",
+    "ws": "^8.9.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.5.3",
+    "esbuild": "^0.12.15",
+    "typescript": "~4.8.4"
+  }
+}

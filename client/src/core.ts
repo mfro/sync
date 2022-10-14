@@ -61,7 +61,7 @@ export class Adapt<Model> {
     return this[Fields.RAW];
   }
 
-  static register<T>(name: string, adapter: typeof Adapt<T>) {
+  static register<T>(name: string, adapter: any) {
     registerLoadAdapter<T>(name, (inner) => new adapter(inner) as any);
   }
 }
@@ -222,7 +222,12 @@ export function createValue<T extends DataObject | DataAdapt>(context: Context, 
     const adapter = loadAdapters.get(raw[0]);
     assert(adapter != null, 'adapter');
 
-    return adapter(proxy);
+    const value = adapter(proxy);
+    // caching this causes a lot of problems with refs
+    // - rawJSON doesn't work as it pulls the cached value instead of the ['ref']
+    // - if the target of the ref is replaced, the cache is stale
+    // proxyCache.set(raw, value);
+    return value;
   } else {
     proxyCache.set(raw, proxy);
     return proxy;

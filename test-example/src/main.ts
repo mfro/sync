@@ -3,27 +3,28 @@ import { createApp, h } from 'vue'
 import { framework } from '@mfro/vue-ui';
 
 import App from './view/App.vue';
-import { join, join_new } from '@mfro/sync-vue';
+import { Collection, join, join_new } from '@mfro/sync-vue';
 
 main();
 
 function init(id: string, data: any) {
   data.x = { counter: 5 };
-  data.y = { counter: 5 };
-  data.z = data.x;
+  data.x.test = Collection.create();
+  data.x.test.insert(data.x);
 
-  console.log(data)
+  // console.log(JSON.stringify(data));
+  console.log(data);
 
-  const app = createApp({
-    provide: { data, id },
-    render: () => h(App),
-  });
+  // const app = createApp({
+  //   provide: { data, id },
+  //   render: () => h(App),
+  // });
 
-  app.config.unwrapInjectedRef = true;
+  // app.config.unwrapInjectedRef = true;
 
-  app.use(framework);
+  // app.use(framework);
 
-  app.mount('#app');
+  // app.mount('#app');
 }
 
 async function main() {
