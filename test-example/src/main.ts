@@ -1,3 +1,4 @@
+import 'ress'
 import { createApp, h } from 'vue'
 import { framework } from '@mfro/vue-ui';
 
@@ -7,6 +8,12 @@ import { join, join_new } from '@mfro/sync-vue';
 main();
 
 function init(id: string, data: any) {
+  data.x = { counter: 5 };
+  data.y = { counter: 5 };
+  data.z = data.x;
+
+  console.log(data)
+
   const app = createApp({
     provide: { data, id },
     render: () => h(App),
@@ -24,10 +31,10 @@ async function main() {
   const idParam = url.searchParams.get('id');
 
   if (idParam) {
-    const { data } = await join('ws://box:8081', idParam);
+    const { data } = await join('wss://api.mfro.me/sync', idParam);
     init(idParam, data);
   } else {
-    const { data, id } = await join_new('ws://box:8081');
+    const { data, id } = await join_new('wss://api.mfro.me/sync');
     init(id, data);
   }
 }

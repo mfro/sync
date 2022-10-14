@@ -1,3 +1,4 @@
+import { assert } from '@mfro/assert';
 import { Adapt } from './core';
 
 export type CollectionModel<T> =
@@ -5,28 +6,38 @@ export type CollectionModel<T> =
   & { nextId: number };
 
 export class Collection<T> extends Adapt<CollectionModel<T>> {
-  static create<T>() {
-    return new Collection<T>({ nextId: 0 });
+  static create<T = any>(): Collection<T> {
+    return ['collection', { nextId: 0 }] as any;
   }
 
   get(id: number) {
-    return this.model[id];
+    return this.value[id];
   }
 
   array() {
-    return Object.keys(this.model)
+    return Object.keys(this.value)
       .filter(id => id != 'nextId')
-      .map(id => this.model[id as any]);
+      .map(id => this.value[id as any]);
   }
 
   insert(value: T) {
-    const id = this.model.nextId++;
+    let id;
 
-    return this.model[id] = Object.assign({ id }, value);
+    if ('id' in value) {
+      id = (value as any).id;
+      assert(typeof id == 'number', 'invalid id')
+      this.value.nextId = Math.max(this.value.nextId, id + 1);
+    } else {
+      id = this.value.nextId++;
+      Object.assign(value as any, { id });
+    }
+
+    this.value[id] = value as any;
+    return this.get(id);
   }
 
   remove(id: number) {
-    delete this.model[id];
+    delete this.value[id];
   }
 }
 

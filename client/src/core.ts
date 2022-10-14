@@ -1,10 +1,10 @@
-import { isObject } from '@vue/shared'
-import { track, trigger, TrackOpTypes, TriggerOpTypes, ITERATE_KEY, ReactiveFlags, toRaw } from '@vue/reactivity'
+import { trigger, TrackOpTypes, TriggerOpTypes, ReactiveFlags, toRaw, ITERATE_KEY, track } from '@vue/reactivity'
 import { nextTick } from '@vue/runtime-core'
 import { assert } from '@mfro/assert';
 
 import { Path } from './path';
 import { Change, ServerHandshake, ServerUpdate } from './common';
+import { isObject } from '@vue/shared';
 
 export const VueTrackOps = {
   GET: 'get' as TrackOpTypes.GET,
@@ -19,41 +19,54 @@ export const VueTriggerOps = {
   CLEAR: 'clear' as TriggerOpTypes.CLEAR,
 };
 
-export const Flags = {
-  RAW: '__v_raw' as ReactiveFlags.RAW,
-  SAVE: '__v_save' as const,
-};
-
 export const Fields = {
+  RAW: '__v_raw' as ReactiveFlags.RAW,
   path: '__mfro_path',
   context: '__mfro_context',
 } as const;
 
-export class Adapt<Model> {
-  constructor(
-    protected readonly model: Model
-  ) { }
+export type ProxyBase = {
+  [Fields.RAW]: DataValue,
+  [Fields.path]: string,
+  [Fields.context]: Context,
+};
 
-  toJSON() {
-    return (this as any)[Flags.SAVE];
+export type ProxyTarget = {
+  [Fields.path]: string,
+  [Fields.context]: Context,
+};
+
+export class Adapt<Model> {
+  protected get value() {
+    return this.inner[1];
   }
 
-  static register<T extends DataObject>(name: string, adapter: typeof Adapt<T>) {
-    registerLoadAdapter<T>(name, (context, path, target) => {
-      return new adapter(createValue(context, path, target));
-    });
+  constructor(
+    private readonly inner: [string, Model] & ProxyTarget
+  ) { }
 
-    Object.defineProperty(adapter.prototype, Flags.SAVE, {
-      enumerable: false,
-      configurable: false,
-      get(this: Adapt<T>) {
-        return [name, this.model];
-      },
-    });
+  private get [Fields.RAW]() {
+    return this.inner as any;
+  }
+
+  private get [Fields.path]() {
+    return this.inner[Fields.path];
+  }
+
+  private get [Fields.context]() {
+    return this.inner[Fields.context];
+  }
+
+  private toJSON() {
+    return this[Fields.RAW];
+  }
+
+  static register<T>(name: string, adapter: typeof Adapt<T>) {
+    registerLoadAdapter<T>(name, (inner) => new adapter(inner) as any);
   }
 }
 
-export type LoadAdapter<T extends DataValue> = (context: Context, path: string, v: T) => object;
+export type LoadAdapter<T> = (inner: [string, T] & ProxyTarget) => object & ProxyBase;
 
 export type DataValue =
   | null
@@ -61,7 +74,6 @@ export type DataValue =
   | string
   | boolean
   | DataObject
-// | JSONArray
 
 export type DataAdapt = [string, DataValue];
 export type DataObject = Partial<{ [key: string]: DataValue }>;
@@ -71,18 +83,21 @@ export interface Context {
   version: number;
   speculation: number;
   changes: Change[],
-  root: any;
+  root: DataObject;
 
   cacheKey: string;
 }
 
-type ProxyBase = {
-  [Fields.path]: string,
-  [Fields.context]: Context,
-};
-
 const loadAdapters = new Map<string, LoadAdapter<any>>();
-const proxyCache = new WeakMap<any, object>();
+const proxyCache = new WeakMap<any, ProxyBase>();
+export let rawJSON = false;
+
+function stringify(value: any) {
+  rawJSON = true;
+  const json = JSON.stringify(value);
+  rawJSON = false;
+  return json;
+}
 
 function flush(context: Context) {
   // console.log(`flush`, context.changes);
@@ -90,7 +105,7 @@ function flush(context: Context) {
   context.version += 1;
   context.speculation += 1;
 
-  context.ws.send(JSON.stringify({
+  context.ws.send(stringify({
     version: context.version,
     changes: context.changes,
   }));
@@ -99,7 +114,7 @@ function flush(context: Context) {
 }
 
 export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
-  let [cacheKey, version, state] = args.length == 0
+  let [cacheKey, version, root] = args.length == 0
     ? ['', 0, {}]
     : args;
 
@@ -109,11 +124,9 @@ export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
       version,
       speculation: 0,
       changes: [],
-      root: null,
+      root,
       cacheKey,
     };
-
-    context.root = createValue(context, '', state);
 
     ws.addEventListener('close', e => console.log(e));
     ws.addEventListener('error', e => console.log(e));
@@ -129,7 +142,7 @@ export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
 
       if ('id' in message) {
         resolve({
-          data: context.root,
+          data: createValue(context, '', root),
           id: message.id!,
         });
       }
@@ -153,15 +166,15 @@ function applyUpdate(context: Context, update: ServerUpdate) {
     context.speculation -= 1;
   }
 
-  localStorage.setItem(context.cacheKey, JSON.stringify({
+  localStorage.setItem(context.cacheKey, stringify({
     version: context.version,
-    state: toRaw(context.root),
+    root: context.root,
   }));
 }
 
 function applyChange(context: Context, target: string, value: any) {
   const path = Path.parse(target);
-  const receiver = Path.resolve(toRaw(context.root), path.slice(0, -1));
+  const receiver = toRaw(Path.resolve(context.root, path.slice(0, -1)));
   const lastKey = path[path.length - 1];
 
   if (value === undefined) {
@@ -178,113 +191,53 @@ function applyChange(context: Context, target: string, value: any) {
 export function createValue<T extends DataObject | DataAdapt>(context: Context, path: string, target: T) {
   assert(typeof target == 'object' && target != null, 'createValue');
 
-  const existing = proxyCache.get(target);
-  if (existing) return existing as T;
+  const raw = toRaw(target) as any;
+  if (raw[Fields.path] && raw[Fields.path] !== path) {
+    return ['ref', raw[Fields.path]];
+  }
 
-  if (Array.isArray(target)) {
-    assert(target.length == 2 && typeof target[0] == 'string', 'adapter');
+  const existing = proxyCache.get(raw);
+  if (existing) return existing;
 
-    const adapter = loadAdapters.get(target[0]);
+  Object.defineProperties(raw, {
+    [Fields.path]: {
+      value: path,
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    },
+    [Fields.context]: {
+      value: context,
+      writable: false,
+      enumerable: false,
+      configurable: false,
+    },
+  })
+
+  const proxy: any = new Proxy(raw, proxyHandler);
+
+  if (Array.isArray(raw)) {
+    assert(raw.length == 2 && typeof raw[0] == 'string', 'adapter');
+
+    const adapter = loadAdapters.get(raw[0]);
     assert(adapter != null, 'adapter');
 
-    const value = adapter(context, `${path}/1`, target[1]);
-    proxyCache.set(target, value);
-
-    return value;
+    return adapter(proxy);
   } else {
-    Object.defineProperties(target, {
-      [Fields.context]: {
-        value: context,
-        writable: false,
-        enumerable: false,
-        configurable: false,
-      },
-      [Fields.path]: {
-        value: path,
-        writable: false,
-        enumerable: false,
-        configurable: false,
-      },
-    });
-
-    const value = new Proxy(target as any, {
-      has(target, key) {
-        track(target, VueTrackOps.HAS, key);
-        return key in target;
-      },
-
-      get(target, key, self) {
-        if (key == Flags.RAW)
-          return target;
-
-        if (key == Flags.SAVE) {
-          const context: Context = target[Fields.context];
-          const path: string = target[Fields.path];
-
-          assert(target === Path.resolve(toRaw(context.root), Path.parse(path)), 'invalid ref assignment');
-          return ['ref', path];
-        }
-
-        if (key == 'toJSON') {
-          return () => this[Flags.SAVE];
-        }
-
-        track(target, VueTrackOps.GET, key);
-        const value = Reflect.get(target, key, self);
-
-        if (typeof key == 'symbol' || !isObject(value)) {
-          return value;
-        } else {
-          const path: string = target[Fields.path] + Path.toString([key]);
-          const context: Context = target[Fields.context];
-
-          return createValue(context, path, value);
-        }
-      },
-
-      set(target, key, value, self) {
-        if (typeof key == 'symbol') {
-          return Reflect.set(target, key, value, self);
-        } else {
-          const path: string = target[Fields.path] + Path.toString([key]);
-          const context: Context = target[Fields.context];
-
-          update(context, path, value);
-          return true;
-        }
-      },
-
-      deleteProperty(target, key) {
-        if (typeof key == 'symbol') {
-          return Reflect.deleteProperty(target, key);
-        } else {
-          const path = target[Fields.path] + Path.toString([key]);
-          update(target[Fields.context], path, undefined);
-
-          return true;
-        }
-      },
-
-      ownKeys(target) {
-        track(target, VueTrackOps.ITERATE, ITERATE_KEY);
-        return Reflect.ownKeys(target)
-      },
-    });
-
-    proxyCache.set(target, value);
-    return value;
+    proxyCache.set(raw, proxy);
+    return proxy;
   }
 }
 
-export function registerLoadAdapter<T extends DataValue>(name: string, load: LoadAdapter<T>) {
+export function registerLoadAdapter<T>(name: string, load: LoadAdapter<T>) {
   assert(!loadAdapters.has(name), `duplicate adapter definition ${name}`);
   loadAdapters.set(name, load);
 }
 
 export function update(context: Context, target: string, value: any) {
-  // console.log(`update`, target, value);
-
-  value = value?.[Flags.SAVE] ?? toRaw(value);
+  if (isObject(value)) {
+    value = createValue(context, target, value)
+  }
 
   if (context.changes.length == 0) {
     nextTick(() => flush(context));
@@ -294,3 +247,56 @@ export function update(context: Context, target: string, value: any) {
 
   applyChange(context, target, value);
 }
+
+const proxyHandler: ProxyHandler<ProxyTarget> = {
+  has(target, key) {
+    track(target, VueTrackOps.HAS, key);
+    return key in target;
+  },
+
+  get(target, key, self) {
+    if (key == Fields.RAW) return target;
+
+    if (key == Fields.path) {
+      if (rawJSON) return undefined;
+      return target[Fields.path];
+    }
+
+    if (key == Fields.context) {
+      if (rawJSON) return undefined;
+      return target[Fields.context];
+    }
+
+    track(target, VueTrackOps.GET, key);
+    const value = Reflect.get(target, key, self);
+
+    if (typeof key == 'symbol' || !isObject(value)) {
+      return value;
+    } else {
+      return createValue(target[Fields.context], target[Fields.path] + Path.toString([key]), value);
+    }
+  },
+
+  set(target, key, value, self) {
+    if (typeof key == 'symbol') {
+      return Reflect.set(target, key, value, self);
+    } else {
+      update(target[Fields.context], target[Fields.path] + Path.toString([key]), value);
+      return true;
+    }
+  },
+
+  deleteProperty(target, key) {
+    if (typeof key == 'symbol') {
+      return Reflect.deleteProperty(target, key);
+    } else {
+      update(target[Fields.context], target[Fields.path] + Path.toString([key]), undefined);
+      return true;
+    }
+  },
+
+  ownKeys(target) {
+    track(target, VueTrackOps.ITERATE, ITERATE_KEY);
+    return Reflect.ownKeys(target);
+  },
+};

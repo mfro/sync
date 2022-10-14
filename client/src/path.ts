@@ -1,4 +1,5 @@
 import { assert } from '@mfro/assert';
+import { toRaw } from '@vue/reactivity';
 
 export namespace Path {
   export function resolve(root: any, path: string[]) {
@@ -6,7 +7,7 @@ export namespace Path {
 
     for (const key of path) {
       assert(key in node, 'invalid node');
-      node = node[key];
+      node = toRaw(node[key]);
     }
 
     return node;

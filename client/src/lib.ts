@@ -11,7 +11,7 @@ export async function join_new(host: string) {
 export async function join(host: string, id: string) {
   let cacheKey = '';
   let version = 0;
-  let state = {};
+  let root = {};
 
   if (id !== null) {
     cacheKey = `mfro:sync:${id}`;
@@ -20,10 +20,10 @@ export async function join(host: string, id: string) {
     if (cache) {
       const loaded = JSON.parse(cache);
       version = loaded.version;
-      state = loaded.state;
+      root = loaded.root;
     }
   }
 
   const ws = new WebSocket(`${host}/join?id=${id}&version=${version}`);
-  return await init(ws, cacheKey, version, state);
+  return await init(ws, cacheKey, version, root);
 }

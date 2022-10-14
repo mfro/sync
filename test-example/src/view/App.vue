@@ -2,15 +2,35 @@
   <v-app class="root">
     <pre class="pa-3"><a :href="link">{{ link }}</a></pre>
 
-    <pre>{{ JSON.stringify(data) }}</pre>
+    <pre>{{ JSON.stringify(data, null, '  ') }}</pre>
 
     <v-flex class="pa-3">
-      <v-button @click="start"
-                class="ma-3">start</v-button>
-      <v-button @click="increment"
+      <v-button @click="data.x.counter += 1"
                 class="ma-3">+1</v-button>
-      <v-button @click="decrement"
+      <v-button @click="data.x.counter -= 1"
                 class="ma-3">-1</v-button>
+    </v-flex>
+
+    <v-flex class="pa-3">
+      <v-button @click="data.y.counter += 1"
+                class="ma-3">+1</v-button>
+      <v-button @click="data.y.counter -= 1"
+                class="ma-3">-1</v-button>
+    </v-flex>
+
+    <v-flex class="pa-3">
+      <v-button @click="data.z.counter += 1"
+                class="ma-3">+1</v-button>
+      <v-button @click="data.z.counter -= 1"
+                class="ma-3">-1</v-button>
+    </v-flex>
+
+    <v-flex class="pa-3">
+      <v-button @click="data.z = data.x"
+                class="ma-3">x</v-button>
+
+      <v-button @click="data.z = data.y"
+                class="ma-3">y</v-button>
     </v-flex>
   </v-app>
 </template>
@@ -27,10 +47,6 @@ const link = computed(() => {
 
   return url.toString();
 })
-
-function start() {
-  data.state = { counter: 0 };
-}
 
 function increment() {
   data.state.counter += 1;
