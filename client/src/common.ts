@@ -1,18 +1,21 @@
+export type DataValue =
+  | null
+  | number
+  | string
+  | boolean
+  | DataObject
+
+export type DataAdapt = [string, DataValue];
+export type DataObject = Partial<{ [key: string]: DataValue }>;
+
 export interface Change {
   target: string;
   value?: any;
 }
 
-export interface ClientUpdate {
-  version: number,
-  changes: Change[],
-}
-
-export interface ServerHandshake extends ServerUpdate {
-  id?: string;
-}
-
-export interface ServerUpdate {
+export interface Engine {
+  root: DataObject;
   version: number;
-  changes: Change[];
+
+  createChange(target: string, value: any): void;
 }

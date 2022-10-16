@@ -1,10 +1,15 @@
+import { isObject } from '@vue/shared';
 import { trigger, TrackOpTypes, TriggerOpTypes, ReactiveFlags, toRaw, ITERATE_KEY, track } from '@vue/reactivity'
-import { nextTick } from '@vue/runtime-core'
 import { assert } from '@mfro/assert';
 
 import { Path } from './path';
-import { Change, ServerHandshake, ServerUpdate } from './common';
-import { isObject } from '@vue/shared';
+import { DataAdapt, DataObject, DataValue, Engine } from './common';
+
+export const Fields = {
+  RAW: '__v_raw' as ReactiveFlags.RAW,
+  path: '__mfro_path',
+  context: '__mfro_context',
+} as const;
 
 export const VueTrackOps = {
   GET: 'get' as TrackOpTypes.GET,
@@ -19,24 +24,18 @@ export const VueTriggerOps = {
   CLEAR: 'clear' as TriggerOpTypes.CLEAR,
 };
 
-export const Fields = {
-  RAW: '__v_raw' as ReactiveFlags.RAW,
-  path: '__mfro_path',
-  context: '__mfro_context',
-} as const;
-
 export type ProxyBase = {
   [Fields.RAW]: DataValue,
   [Fields.path]: string,
-  [Fields.context]: Context,
+  [Fields.context]: Engine,
 };
 
 export type ProxyTarget = {
   [Fields.path]: string,
-  [Fields.context]: Context,
+  [Fields.context]: Engine,
 };
 
-export class Adapt<Model> {
+export class AdaptClass<Model> {
   protected get value() {
     return this.inner[1];
   }
@@ -62,117 +61,24 @@ export class Adapt<Model> {
   }
 
   static register<T>(name: string, adapter: any) {
-    registerLoadAdapter<T>(name, (inner) => new adapter(inner) as any);
+    registerAdapter<T>(name, (inner) => new adapter(inner) as any);
   }
 }
 
-export type LoadAdapter<T> = (inner: [string, T] & ProxyTarget) => object & ProxyBase;
+export type Adapter<T> = (inner: [string, T] & ProxyTarget) => object & ProxyBase;
 
-export type DataValue =
-  | null
-  | number
-  | string
-  | boolean
-  | DataObject
-
-export type DataAdapt = [string, DataValue];
-export type DataObject = Partial<{ [key: string]: DataValue }>;
-
-export interface Context {
-  ws: WebSocket;
-  version: number;
-  speculation: number;
-  changes: Change[],
-  root: DataObject;
-
-  cacheKey: string;
-}
-
-const loadAdapters = new Map<string, LoadAdapter<any>>();
+const loadAdapters = new Map<string, Adapter<any>>();
 const proxyCache = new WeakMap<any, ProxyBase>();
 export let rawJSON = false;
 
-function stringify(value: any) {
+export function stringify(value: any, indent = undefined) {
   rawJSON = true;
-  const json = JSON.stringify(value);
+  const json = JSON.stringify(value, null, indent);
   rawJSON = false;
   return json;
 }
 
-function flush(context: Context) {
-  // console.log(`flush`, context.changes);
-
-  context.version += 1;
-  context.speculation += 1;
-
-  context.ws.send(stringify({
-    version: context.version,
-    changes: context.changes,
-  }));
-
-  context.changes.length = 0;
-}
-
-export function init(ws: WebSocket, ...args: [] | [string, number, any]) {
-  let [cacheKey, version, root] = args.length == 0
-    ? ['', 0, {}]
-    : args;
-
-  return new Promise<{ data: {}, id: string }>(resolve => {
-    const context: Context = {
-      ws,
-      version,
-      speculation: 0,
-      changes: [],
-      root,
-      cacheKey,
-    };
-
-    ws.addEventListener('close', e => console.log(e));
-    ws.addEventListener('error', e => console.log(e));
-
-    ws.addEventListener('message', e => {
-      const message: ServerHandshake | ServerUpdate = JSON.parse(e.data);
-
-      if ('id' in message) {
-        context.cacheKey = `mfro:sync:${message.id}`;
-      }
-
-      applyUpdate(context, message);
-
-      if ('id' in message) {
-        resolve({
-          data: createValue(context, '', root),
-          id: message.id!,
-        });
-      }
-    });
-  });
-}
-
-function applyUpdate(context: Context, update: ServerUpdate) {
-  // console.log(update);
-
-  if (update.changes) {
-    assert(context.speculation == 0, 'speculation');
-
-    for (const { target, value } of update.changes) {
-      applyChange(context, target, value);
-    }
-
-    context.version = update.version;
-  } else {
-    assert(context.speculation > 0, 'speculation');
-    context.speculation -= 1;
-  }
-
-  localStorage.setItem(context.cacheKey, stringify({
-    version: context.version,
-    root: context.root,
-  }));
-}
-
-function applyChange(context: Context, target: string, value: any) {
+export function applyChange(context: Engine, target: string, value: any) {
   const path = Path.parse(target);
   const receiver = toRaw(Path.resolve(context.root, path.slice(0, -1)));
   const lastKey = path[path.length - 1];
@@ -183,18 +89,16 @@ function applyChange(context: Context, target: string, value: any) {
   } else {
     const hadKey = lastKey in receiver;
 
-    receiver[lastKey] = value;
+    receiver[lastKey] = toRaw(value);
     trigger(receiver, hadKey ? VueTriggerOps.SET : VueTriggerOps.ADD, lastKey);
   }
 }
 
-export function createValue<T extends DataObject | DataAdapt>(context: Context, path: string, target: T) {
+export function createValue<T extends DataObject | DataAdapt>(context: Engine, path: string, target: T) {
   assert(typeof target == 'object' && target != null, 'createValue');
 
   const raw = toRaw(target) as any;
-  if (raw[Fields.path] && raw[Fields.path] !== path) {
-    return ['ref', raw[Fields.path]];
-  }
+  assert(!raw[Fields.path] || raw[Fields.path] === path, 'duplicate value');
 
   const existing = proxyCache.get(raw);
   if (existing) return existing;
@@ -234,23 +138,9 @@ export function createValue<T extends DataObject | DataAdapt>(context: Context, 
   }
 }
 
-export function registerLoadAdapter<T>(name: string, load: LoadAdapter<T>) {
+export function registerAdapter<T>(name: string, load: Adapter<T>) {
   assert(!loadAdapters.has(name), `duplicate adapter definition ${name}`);
   loadAdapters.set(name, load);
-}
-
-export function update(context: Context, target: string, value: any) {
-  if (isObject(value)) {
-    value = createValue(context, target, value)
-  }
-
-  if (context.changes.length == 0) {
-    nextTick(() => flush(context));
-  }
-
-  context.changes.push({ target, value });
-
-  applyChange(context, target, value);
 }
 
 const proxyHandler: ProxyHandler<ProxyTarget> = {
@@ -286,7 +176,9 @@ const proxyHandler: ProxyHandler<ProxyTarget> = {
     if (typeof key == 'symbol') {
       return Reflect.set(target, key, value, self);
     } else {
-      update(target[Fields.context], target[Fields.path] + Path.toString([key]), value);
+      validate_duplicates(value);
+
+      target[Fields.context].createChange(target[Fields.path] + Path.toString([key]), value);
       return true;
     }
   },
@@ -295,7 +187,7 @@ const proxyHandler: ProxyHandler<ProxyTarget> = {
     if (typeof key == 'symbol') {
       return Reflect.deleteProperty(target, key);
     } else {
-      update(target[Fields.context], target[Fields.path] + Path.toString([key]), undefined);
+      target[Fields.context].createChange(target[Fields.path] + Path.toString([key]), undefined);
       return true;
     }
   },
@@ -305,3 +197,13 @@ const proxyHandler: ProxyHandler<ProxyTarget> = {
     return Reflect.ownKeys(target);
   },
 };
+
+function validate_duplicates(value: any) {
+  assert(toRaw(value) === value, 'duplicate value');
+
+  if (value && typeof value === 'object') {
+    for (const key in value) {
+      validate_duplicates(value[key]);
+    }
+  }
+}

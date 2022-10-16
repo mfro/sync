@@ -3,6 +3,7 @@
   "workspaces": [
     "client",
     "test",
-    "test-example"
+    "test-example",
+    "web-explorer"
   ]
 }

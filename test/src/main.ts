@@ -11,10 +11,15 @@ Object.assign(global, {
 
 main();
 async function main() {
-  for (const key in test) {
+  const list = process.argv.slice(2);
+
+  const keys = list.length == 0
+    ? Object.keys(test)
+    : list;
+
+  for (const key of keys) {
     console.log(`running test ${key}`);
-    const fn = test[key as keyof typeof test];
-    await fn();
+    test[key as keyof typeof test]();
   }
 
   process.exit(0);

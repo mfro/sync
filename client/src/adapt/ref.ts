@@ -1,7 +1,15 @@
-import { createValue, Fields, rawJSON, registerLoadAdapter } from './core';
-import { Path } from './path';
+import { assert } from '@mfro/assert';
+import { createValue, Fields, rawJSON, registerAdapter } from '../core';
+import { Path } from '../path';
 
-registerLoadAdapter<string>('ref', (ref) => {
+export function makeRef<T>(target: T): T {
+  const refPath = (target as any)[Fields.path];
+  assert(refPath !== undefined, 'invalid ref target');
+
+  return ['ref', refPath] as any;
+}
+
+registerAdapter<string>('ref', (ref) => {
   if (rawJSON) return ref;
 
   const context = ref[Fields.context];
